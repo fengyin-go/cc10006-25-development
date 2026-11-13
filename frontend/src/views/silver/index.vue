@@ -70,7 +70,7 @@ import { request } from '@/api/client'
 type Row = Record<string, string | number | null>
 
 const ENDPOINT = '/api/silver'
-const columns = ["表编号", "上游原始表", "清洗脚本", "格式校验", "异常过滤", "去重字段", "输出路径", "调度周期"]
+const columns = ["表编号", "上游原始表", "清洗脚本", "格式校验", "异常过滤", "去重字段", "输出路径", "调度周期", "关联批任务", "待处理原因"]
 const actions = ["提交校验", "启用清洗", "停用清洗"]
 const statuses = ["草稿", "待校验", "已启用", "已停用"]
 const stats = [{"label": "清洗表总数", "value": 0}, {"label": "已启用表", "value": 0}, {"label": "待校验表", "value": 0}]
@@ -99,7 +99,7 @@ async function runAction(action: string, row: Row) {
   try {
     const response = await request(`${ENDPOINT}/${row.id}/actions`, {
       method: 'POST',
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ values: { action } }),
     })
     if (!response.ok) {
       throw new Error('清洗层管理动作未生效，请稍后重试')

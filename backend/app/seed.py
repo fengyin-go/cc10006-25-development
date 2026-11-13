@@ -653,3 +653,141 @@ SEED_ROWS: dict[str, list[dict[str, Any]]] = {
   '影响行数': '操作审计样例3',
   '回滚能力': '操作审计样例3'}]
 }
+
+
+# ---------------------------------------------------------------------------
+# 失败隔离与重放：batch_orders_07 完成前十二个分区后卡在第十三个分区
+# ---------------------------------------------------------------------------
+
+BATCH_TASK_ID = 7
+BATCH_TASK_NO = "batch_orders_07"
+BATCH_UPSTREAM = "clean_orders"
+BATCH_TOTAL_PARTITIONS = 16
+BATCH_FAILED_PARTITION = 13
+BATCH_DONE_PARTITIONS = 12
+BATCH_FAIL_TIME = "2026-11-13T09:13:00"
+
+
+def _batch_output_path(output_base: str, partition_no: int) -> str:
+    """输出路径按分区稳定生成：重放只写未成功分区，已成功分区路径永不变化。"""
+    return f"{output_base}/part={partition_no:04d}"
+
+
+def _build_batch_orders_07() -> dict[str, Any]:
+    """构造卡在第 13 个分区的批处理任务：前 12 个分区成功，13 失败，14-16 未完成。"""
+    output_base = "s3://lake/batch/batch_orders_07"
+    input_path = "s3://lake/clean/clean_orders"
+    script = "etl/batch_orders_etl.py"
+    partitions: dict[str, dict[str, Any]] = {}
+    failure_history: list[dict[str, Any]] = []
+    for no in range(1, BATCH_TOTAL_PARTITIONS + 1):
+        key = str(no)
+        if no <= BATCH_DONE_PARTITIONS:
+            partitions[key] = {
+                "分区": no,
+                "状态": "成功",
+                "输出路径": _batch_output_path(output_base, no),
+                "尝试次数": 1,
+                "最近更新时间": BATCH_FAIL_TIME,
+            }
+        elif no == BATCH_FAILED_PARTITION:
+            reason = "处理脚本 etl/batch_orders_etl.py 在分区 13 触发空指针：依赖上游 clean_orders 字段缺失"
+            partitions[key] = {
+                "分区": no,
+                "状态": "失败",
+                "输出路径": None,
+                "尝试次数": 1,
+                "最近更新时间": BATCH_FAIL_TIME,
+                "失败原因": reason,
+            }
+            failure_history.append({
+                "失败记录编号": f"{BATCH_TASK_NO}-F001",
+                "任务编号": BATCH_TASK_NO,
+                "任务id": BATCH_TASK_ID,
+                "分区": no,
+                "失败时间": BATCH_FAIL_TIME,
+                "处理脚本": script,
+                "依赖上游": BATCH_UPSTREAM,
+                "输入路径": input_path,
+                "失败原因": reason,
+                "状态": "待处理",
+                "重放实例编号": None,
+                "解决时间": None,
+            })
+        else:
+            partitions[key] = {
+                "分区": no,
+                "状态": "未完成",
+                "输出路径": None,
+                "尝试次数": 0,
+                "最近更新时间": None,
+            }
+    return {
+        "id": BATCH_TASK_ID,
+        "status": "已失败",
+        "pending": True,
+        "abnormal": True,
+        "任务编号": BATCH_TASK_NO,
+        "输入路径": input_path,
+        "处理脚本": script,
+        "输出路径": output_base,
+        "分区覆盖": f"1-{BATCH_TOTAL_PARTITIONS}",
+        "依赖上游": BATCH_UPSTREAM,
+        "重试策略": "失败隔离重放",
+        "超时终止": "3600",
+        "分区总数": BATCH_TOTAL_PARTITIONS,
+        "成功分区数": BATCH_DONE_PARTITIONS,
+        "失败分区数": 1,
+        "未完成分区数": BATCH_TOTAL_PARTITIONS - BATCH_DONE_PARTITIONS - 1,
+        "分区结果": partitions,
+        "失败历史": failure_history,
+        "重放实例": [],
+        "重放中": False,
+    }
+
+
+def _build_clean_orders_silver() -> dict[str, Any]:
+    """batch_orders_07 依赖的清洗层上游 clean_orders，初始为待处理队列成员。"""
+    return {
+        "id": 4,
+        "status": "待校验",
+        "pending": True,
+        "abnormal": True,
+        "表编号": BATCH_UPSTREAM,
+        "上游原始表": "raw_orders",
+        "清洗脚本": "etl/clean_orders_sql.py",
+        "格式校验": "非空+主键唯一",
+        "异常过滤": "脏数据隔离",
+        "去重字段": "order_id",
+        "输出路径": "s3://lake/clean/clean_orders",
+        "调度周期": "每日",
+        "待处理原因": f"下游批处理任务 {BATCH_TASK_NO} 分区 {BATCH_FAILED_PARTITION} 失败，等待清洗修复",
+        "关联批任务": BATCH_TASK_NO,
+    }
+
+
+def _build_batch_quality() -> dict[str, Any]:
+    """失败清单驱动的质量异常台账：与失败分区一一对应，重放成功后自动核销。"""
+    return {
+        "id": 4,
+        "status": "待校验",
+        "pending": True,
+        "abnormal": True,
+        "指标编号": f"QUAL-BATCH-{BATCH_FAILED_PARTITION:04d}",
+        "监控对象": f"{BATCH_TASK_NO}/part={BATCH_FAILED_PARTITION:04d}",
+        "指标类型": "批处理失败异常",
+        "阈值范围": "失败分区数=0",
+        "检测周期": "每批次",
+        "告警级别": "高",
+        "通知渠道": "数据工程值班群",
+        "恢复策略": "失败分区隔离重放",
+        "来源模块": "batch",
+        "来源任务": BATCH_TASK_NO,
+        "来源分区": BATCH_FAILED_PARTITION,
+        "关联失败记录": f"{BATCH_TASK_NO}-F001",
+    }
+
+
+SEED_ROWS["batch"].append(_build_batch_orders_07())
+SEED_ROWS["silver"].append(_build_clean_orders_silver())
+SEED_ROWS["quality"].append(_build_batch_quality())

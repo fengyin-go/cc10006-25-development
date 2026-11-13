@@ -70,7 +70,7 @@ import { request } from '@/api/client'
 type Row = Record<string, string | number | null>
 
 const ENDPOINT = '/api/quality'
-const columns = ["指标编号", "监控对象", "指标类型", "阈值范围", "检测周期", "告警级别", "通知渠道", "恢复策略"]
+const columns = ["指标编号", "监控对象", "指标类型", "阈值范围", "检测周期", "告警级别", "通知渠道", "恢复策略", "来源任务", "来源分区", "关联失败记录", "异常状态"]
 const actions = ["提交校验", "启用监控", "停用监控"]
 const statuses = ["草稿", "待校验", "已启用", "已停用"]
 const stats = [{"label": "质量指标总数", "value": 0}, {"label": "已启用指标", "value": 0}, {"label": "待校验指标", "value": 0}]
@@ -99,7 +99,7 @@ async function runAction(action: string, row: Row) {
   try {
     const response = await request(`${ENDPOINT}/${row.id}/actions`, {
       method: 'POST',
-      body: JSON.stringify({ action }),
+      body: JSON.stringify({ values: { action } }),
     })
     if (!response.ok) {
       throw new Error('质量监控动作未生效，请稍后重试')

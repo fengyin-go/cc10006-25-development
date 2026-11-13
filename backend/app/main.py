@@ -36,3 +36,19 @@ def health() -> dict[str, object]:
 def overview() -> dict[str, object]:
     """运营概览：把各业务模块的待处理量汇总成看板卡片。"""
     return store.overview()
+
+
+@app.on_event("startup")
+def sync_batch_failure_ledgers() -> None:
+    """启动时用批处理失败清单对齐质量异常台账与清洗待处理队列。"""
+    from app.services.batch import BatchService
+
+    BatchService().sync_ledgers()
+
+
+@app.post("/api/batch/sync-ledgers")
+def sync_batch_failure_ledgers_manual() -> dict[str, object]:
+    """手动触发失败清单跨模块同步：质量台账与清洗待处理队列按最新失败记录对齐。"""
+    from app.services.batch import BatchService
+
+    return {"ok": True, "synced": BatchService().sync_ledgers()}
